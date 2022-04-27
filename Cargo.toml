@@ -1,0 +1,12 @@
+[package]
+name = "pathscheme"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/olix0r/pathscheme"
+keywords = ["http", "router", "path", "url", "url-router"]
+description = "A basic path matching language"
+
+[dependencies]
+indexmap = "1"
+thiserror = "1"
