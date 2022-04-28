@@ -53,6 +53,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use indexmap::IndexMap;
+use std::sync::Arc;
 
 /// Describes a path scheme that may match one or paths.
 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
@@ -83,8 +84,8 @@ pub enum ParseError {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 enum Element {
-    Literal(String),
-    Identifier(String),
+    Literal(Arc<str>),
+    Identifier(Arc<str>),
     SuffixGlob,
 }
 
@@ -93,7 +94,7 @@ impl PathScheme {
     ///
     /// Returns a value if the path matches the scheme, otherwise `None`. The
     /// returned map contains all identifiers expressed in the scheme.
-    pub fn matches(&self, path: &str) -> Option<IndexMap<String, String>> {
+    pub fn matches(&self, path: &str) -> Option<IndexMap<Arc<str>, String>> {
         let mut elements = self.elements.iter();
         let mut element = match elements.next() {
             Some(el) => el,
@@ -108,13 +109,13 @@ impl PathScheme {
         loop {
             match element {
                 Element::Literal(p) => {
-                    if paths.next()? != p {
+                    if paths.next()? != p.as_ref() {
                         return None;
                     }
                 }
                 Element::Identifier(id) => {
                     let segment = paths.next()?;
-                    matches.insert(id.to_string(), segment.to_string());
+                    matches.insert(id.clone(), segment.to_string());
                 }
                 Element::SuffixGlob => {
                     break;
@@ -155,7 +156,7 @@ impl std::str::FromStr for PathScheme {
                     if id.is_empty() {
                         return Err(ParseError::InvalidIdentifier(id.to_string()));
                     }
-                    elements.push(Element::Identifier(id.to_string()));
+                    elements.push(Element::Identifier(Arc::from(id.to_string())));
                     path = rest;
                     continue;
                 }
@@ -163,7 +164,7 @@ impl std::str::FromStr for PathScheme {
                 if id.is_empty() {
                     return Err(ParseError::InvalidIdentifier(id.to_string()));
                 }
-                elements.push(Element::Identifier(id.to_string()));
+                elements.push(Element::Identifier(Arc::from(id.to_string())));
                 break;
             }
 
@@ -171,7 +172,7 @@ impl std::str::FromStr for PathScheme {
                 if id.is_empty() || id == "**" {
                     return Err(ParseError::InvalidLiteral(id.to_string()));
                 }
-                elements.push(Element::Literal(id.to_string()));
+                elements.push(Element::Literal(Arc::from(id.to_string())));
                 path = rest;
                 continue;
             }
@@ -179,7 +180,7 @@ impl std::str::FromStr for PathScheme {
             if path == "**" {
                 elements.push(Element::SuffixGlob);
             } else {
-                elements.push(Element::Literal(path.to_string()));
+                elements.push(Element::Literal(Arc::from(path.to_string())));
             }
             break;
         }
@@ -226,8 +227,8 @@ mod tests {
             "/foo/bar".parse::<PathScheme>().unwrap(),
             PathScheme {
                 elements: vec![
-                    Element::Literal("foo".to_string()),
-                    Element::Literal("bar".to_string())
+                    Element::Literal(Arc::from("foo".to_string())),
+                    Element::Literal(Arc::from("bar".to_string()))
                 ]
             },
         );
@@ -251,8 +252,8 @@ mod tests {
             "/foo/:bar".parse::<PathScheme>().unwrap(),
             PathScheme {
                 elements: vec![
-                    Element::Literal("foo".to_string()),
-                    Element::Identifier("bar".to_string())
+                    Element::Literal(Arc::from("foo".to_string())),
+                    Element::Identifier(Arc::from("bar".to_string()))
                 ]
             },
         );
@@ -263,15 +264,18 @@ mod tests {
         assert_eq!(
             "/foo/**".parse::<PathScheme>().unwrap(),
             PathScheme {
-                elements: vec![Element::Literal("foo".to_string()), Element::SuffixGlob]
+                elements: vec![
+                    Element::Literal(Arc::from("foo".to_string())),
+                    Element::SuffixGlob
+                ]
             },
         );
         assert_eq!(
             "/foo/:bar/**".parse::<PathScheme>().unwrap(),
             PathScheme {
                 elements: vec![
-                    Element::Literal("foo".to_string()),
-                    Element::Identifier("bar".to_string()),
+                    Element::Literal(Arc::from("foo".to_string())),
+                    Element::Identifier(Arc::from("bar".to_string())),
                     Element::SuffixGlob
                 ]
             },
