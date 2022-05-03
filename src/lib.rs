@@ -52,6 +52,9 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(feature = "serde")]
+mod serde;
+
 use indexmap::IndexMap;
 use std::{fmt::Write, sync::Arc};
 
