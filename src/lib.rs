@@ -53,7 +53,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use indexmap::IndexMap;
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 /// Describes a path scheme that may match one or paths.
 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
@@ -186,6 +186,37 @@ impl std::str::FromStr for PathScheme {
         }
 
         Ok(PathScheme { elements })
+    }
+}
+
+impl std::fmt::Display for PathScheme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut elements = self.elements.iter();
+        let mut element = match elements.next() {
+            Some(el) => el,
+            None => {
+                f.write_char('/')?;
+                return Ok(());
+            }
+        };
+        loop {
+            write!(f, "/{}", element)?;
+            element = match elements.next() {
+                Some(el) => el,
+                None => return Ok(()),
+            };
+        }
+    }
+}
+
+impl std::fmt::Display for Element {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Element::Literal(p) => write!(f, "{}", p)?,
+            Element::Identifier(id) => write!(f, ":{}", id)?,
+            Element::SuffixGlob => write!(f, "**")?,
+        }
+        Ok(())
     }
 }
 
@@ -343,5 +374,12 @@ mod tests {
             .matches("/users/olix0r/face/glasses")
             .expect("matches");
         assert_eq!(m.get("id").expect(":id matched"), "olix0r");
+    }
+
+    #[test]
+    fn display() {
+        for p in &["/", "/users/:id/face", "/users/:id/**"] {
+            assert_eq!(&p.parse::<PathScheme>().unwrap().to_string(), p);
+        }
     }
 }
