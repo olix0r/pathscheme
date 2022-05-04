@@ -55,6 +55,9 @@
 #[cfg(feature = "serde")]
 mod serde;
 
+#[cfg(feature = "schemars")]
+mod schemars;
+
 use indexmap::IndexMap;
 use std::{fmt::Write, sync::Arc};
 

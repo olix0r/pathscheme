@@ -10,6 +10,7 @@ description = "A basic path matching language"
 [dependencies]
 indexmap = "1"
 serde = { version = "1", optional = true, default-features = false }
+schemars = { version = "0.8", optional = true, default-features = false }
 thiserror = "1"
 
 [dev-dependencies]
