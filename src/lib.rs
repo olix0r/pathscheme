@@ -13,6 +13,16 @@
 //!     .is_empty());
 //! ```
 //!
+//! Literal path matching is case-sensitive:
+//!
+//! ```
+//! # use pathscheme::*;
+//! assert!("/users/new".parse::<PathScheme>()
+//!     .unwrap()
+//!     .matches("/users/New")
+//!     .is_none());
+//! ```
+//!
 //! Or they may capture path segments:
 //!
 //! ```
@@ -62,7 +72,7 @@ use indexmap::IndexMap;
 use std::{fmt::Write, sync::Arc};
 
 /// Describes a path scheme that may match one or paths.
-#[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PathScheme {
     elements: Vec<Element>,
 }
@@ -88,7 +98,7 @@ pub enum ParseError {
     TrailingSlash,
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Hash, PartialEq, PartialOrd, Eq, Ord)]
 enum Element {
     Literal(Arc<str>),
     Identifier(Arc<str>),
