@@ -7,9 +7,9 @@
 //! ```
 //! # use pathscheme::*;
 //! assert!("/users/new".parse::<PathScheme>()
-//!     .unwrap()
+//!     .expect("parses")
 //!     .matches("/users/new")
-//!     .unwrap()
+//!     .expect("matches")
 //!     .is_empty());
 //! ```
 //!
@@ -18,7 +18,7 @@
 //! ```
 //! # use pathscheme::*;
 //! assert!("/users/new".parse::<PathScheme>()
-//!     .unwrap()
+//!     .expect("parses")
 //!     .matches("/users/New")
 //!     .is_none());
 //! ```
@@ -28,10 +28,10 @@
 //! ```
 //! # use pathscheme::*;
 //! let matches = "/users/:id".parse::<PathScheme>()
-//!     .unwrap()
+//!     .expect("parses")
 //!     .matches("/users/olix0r")
-//!     .unwrap();
-//! assert!(matches.get("id").unwrap() == "olix0r");
+//!     .expect("matches");
+//! assert!(matches.get("id").expect("id is set") == "olix0r");
 //! ```
 //!
 //! Path schemes must match the entire path:
@@ -39,7 +39,7 @@
 //! ```
 //! # use pathscheme::*;
 //! assert!("/users/:id".parse::<PathScheme>()
-//!     .unwrap()
+//!     .expect("parses")
 //!     .matches("/users/olix0r/dogs")
 //!     .is_none());
 //!```
@@ -49,14 +49,33 @@
 //! ```
 //! # use pathscheme::*;
 //! assert!("/users/:id/**".parse::<PathScheme>()
-//!     .unwrap()
-//!     .matches("/users/olix0r")
+//!     .expect("parses")
+//!     .matches("/users/olix0r/dogs/bark")
 //!     .is_some());
-//! assert!("/users/:id/**".parse::<PathScheme>()
-//!     .unwrap()
-//!     .matches("/users/olix0r/dogs")
-//!     .is_some());
+//! ```
+//!
+//! Suffix globs may also be named:
+//!
+//! ```
+//! # use pathscheme::*;
+//! let m = "/users/:id/*path".parse::<PathScheme>()
+//!     .expect("parses")
+//!     .matches("/users/olix0r/dogs/bark")
+//!     .expect("matches");
+//! assert_eq!(m.get("path").expect("path is set"), "dogs/bark");
 //!```
+//!
+//! Named globs are only present in the resulting match map if the match is
+//! non-empty:
+//!
+//! ```
+//! # use pathscheme::*;
+//! let m = "/users/:id/*path".parse::<PathScheme>()
+//!     .expect("parses")
+//!     .matches("/users/olix0r")
+//!     .expect("matches");
+//! assert!(m.get("path").is_none());
+//! ```
 
 #![deny(warnings, rust_2018_idioms, missing_docs)]
 #![forbid(unsafe_code)]
@@ -102,7 +121,7 @@ pub enum ParseError {
 enum Element {
     Literal(Arc<str>),
     Identifier(Arc<str>),
-    SuffixGlob,
+    SuffixGlob(Option<Arc<str>>),
 }
 
 impl PathScheme {
@@ -133,9 +152,19 @@ impl PathScheme {
                     let segment = paths.next()?;
                     matches.insert(id.clone(), segment.to_string());
                 }
-                Element::SuffixGlob => {
+                Element::SuffixGlob(Some(id)) => {
+                    if let Some(p) = paths.next() {
+                        let mut suffix = String::new();
+                        suffix.push_str(p);
+                        for p in paths {
+                            suffix.push('/');
+                            suffix.push_str(p);
+                        }
+                        matches.insert(id.clone(), suffix);
+                    }
                     break;
                 }
+                Element::SuffixGlob(None) => break,
             }
 
             element = match elements.next() {
@@ -148,6 +177,7 @@ impl PathScheme {
                 }
             };
         }
+        debug_assert!(elements.next().is_none());
 
         Some(matches)
     }
@@ -157,48 +187,43 @@ impl std::str::FromStr for PathScheme {
     type Err = ParseError;
 
     fn from_str(path: &str) -> Result<Self, Self::Err> {
-        let mut path = match path.split_once('/') {
-            Some(("", path)) => path,
+        let mut rest = match path.split_once('/') {
+            Some(("", p)) if p.is_empty() => None,
+            Some(("", p)) if p.ends_with('/') => return Err(ParseError::TrailingSlash),
+            Some(("", p)) => Some(p),
             _ => return Err(ParseError::RelativePath),
         };
-        if path.ends_with('/') {
-            return Err(ParseError::TrailingSlash);
-        }
 
         let mut elements = Vec::new();
-        while !path.is_empty() {
-            if let Some(id) = path.strip_prefix(':') {
-                if let Some((id, rest)) = id.split_once('/') {
-                    if id.is_empty() {
-                        return Err(ParseError::InvalidIdentifier(id.to_string()));
-                    }
-                    elements.push(Element::Identifier(Arc::from(id.to_string())));
-                    path = rest;
-                    continue;
-                }
+        while let Some(path) = rest {
+            let component;
+            (component, rest) = match path.split_once('/') {
+                Some((id, path)) => (id, Some(path)),
+                None => (path, None),
+            };
 
+            // If the next path component looks like an :identifier, parse it.
+            if let Some(id) = component.strip_prefix(':') {
+                // Add the identifier to the path (unless it's empty).
                 if id.is_empty() {
-                    return Err(ParseError::InvalidIdentifier(id.to_string()));
+                    return Err(ParseError::InvalidIdentifier(String::new()));
                 }
-                elements.push(Element::Identifier(Arc::from(id.to_string())));
-                break;
-            }
-
-            if let Some((id, rest)) = path.split_once('/') {
-                if id.is_empty() || id == "**" {
-                    return Err(ParseError::InvalidLiteral(id.to_string()));
+                elements.push(Element::Identifier(Arc::from(id)));
+            } else if let Some(glob) = component.strip_prefix('*') {
+                if rest.is_some() {
+                    return Err(ParseError::InvalidLiteral(format!("*{glob}")));
                 }
-                elements.push(Element::Literal(Arc::from(id.to_string())));
-                path = rest;
-                continue;
-            }
-
-            if path == "**" {
-                elements.push(Element::SuffixGlob);
+                if glob == "*" {
+                    elements.push(Element::SuffixGlob(None));
+                } else {
+                    elements.push(Element::SuffixGlob(Some(Arc::from(glob))));
+                }
             } else {
-                elements.push(Element::Literal(Arc::from(path.to_string())));
+                if component.is_empty() {
+                    return Err(ParseError::InvalidLiteral(String::new()));
+                }
+                elements.push(Element::Literal(Arc::from(component)));
             }
-            break;
         }
 
         Ok(PathScheme { elements })
@@ -228,9 +253,10 @@ impl std::fmt::Display for PathScheme {
 impl std::fmt::Display for Element {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Element::Literal(p) => write!(f, "{}", p)?,
-            Element::Identifier(id) => write!(f, ":{}", id)?,
-            Element::SuffixGlob => write!(f, "**")?,
+            Element::Literal(p) => write!(f, "{p}")?,
+            Element::Identifier(id) => write!(f, ":{id}")?,
+            Element::SuffixGlob(Some(id)) => write!(f, "*{id}")?,
+            Element::SuffixGlob(None) => write!(f, "**")?,
         }
         Ok(())
     }
@@ -274,8 +300,8 @@ mod tests {
             "/foo/bar".parse::<PathScheme>().unwrap(),
             PathScheme {
                 elements: vec![
-                    Element::Literal(Arc::from("foo".to_string())),
-                    Element::Literal(Arc::from("bar".to_string()))
+                    Element::Literal(Arc::from("foo")),
+                    Element::Literal(Arc::from("bar"))
                 ]
             },
         );
@@ -299,8 +325,8 @@ mod tests {
             "/foo/:bar".parse::<PathScheme>().unwrap(),
             PathScheme {
                 elements: vec![
-                    Element::Literal(Arc::from("foo".to_string())),
-                    Element::Identifier(Arc::from("bar".to_string()))
+                    Element::Literal(Arc::from("foo")),
+                    Element::Identifier(Arc::from("bar"))
                 ]
             },
         );
@@ -309,11 +335,30 @@ mod tests {
     #[test]
     fn parse_suffix() {
         assert_eq!(
+            "/foo/*bars".parse::<PathScheme>().unwrap(),
+            PathScheme {
+                elements: vec![
+                    Element::Literal(Arc::from("foo")),
+                    Element::SuffixGlob(Some(Arc::from("bars")))
+                ]
+            },
+        );
+        assert_eq!(
+            "/foo/:bar/*bahs".parse::<PathScheme>().unwrap(),
+            PathScheme {
+                elements: vec![
+                    Element::Literal(Arc::from("foo")),
+                    Element::Identifier(Arc::from("bar")),
+                    Element::SuffixGlob(Some(Arc::from("bahs"))),
+                ]
+            },
+        );
+        assert_eq!(
             "/foo/**".parse::<PathScheme>().unwrap(),
             PathScheme {
                 elements: vec![
-                    Element::Literal(Arc::from("foo".to_string())),
-                    Element::SuffixGlob
+                    Element::Literal(Arc::from("foo")),
+                    Element::SuffixGlob(None)
                 ]
             },
         );
@@ -321,9 +366,9 @@ mod tests {
             "/foo/:bar/**".parse::<PathScheme>().unwrap(),
             PathScheme {
                 elements: vec![
-                    Element::Literal(Arc::from("foo".to_string())),
-                    Element::Identifier(Arc::from("bar".to_string())),
-                    Element::SuffixGlob
+                    Element::Literal(Arc::from("foo")),
+                    Element::Identifier(Arc::from("bar")),
+                    Element::SuffixGlob(None),
                 ]
             },
         );
@@ -339,6 +384,14 @@ mod tests {
 
     #[test]
     fn parse_suffix_must_be_last() {
+        assert_eq!(
+            "/foo/*bars/".parse::<PathScheme>().unwrap_err(),
+            ParseError::TrailingSlash
+        );
+        assert_eq!(
+            "/foo/*bars/bah".parse::<PathScheme>().unwrap_err(),
+            ParseError::InvalidLiteral("*bars".to_string())
+        );
         assert_eq!(
             "/foo/**/".parse::<PathScheme>().unwrap_err(),
             ParseError::TrailingSlash
@@ -384,17 +437,47 @@ mod tests {
             .matches("/users/olix0r/face")
             .expect("matches");
         assert_eq!(m.get("id").expect(":id matched"), "olix0r");
-        let m = "/users/:id/**"
+        let m = "/users/:id/*rest"
             .parse::<PathScheme>()
             .unwrap()
             .matches("/users/olix0r/face/glasses")
             .expect("matches");
         assert_eq!(m.get("id").expect(":id matched"), "olix0r");
+        assert_eq!(m.get("rest").expect("*rest matched"), "face/glasses");
+    }
+
+    #[test]
+    fn matches_suffix() {
+        assert!("/**"
+            .parse::<PathScheme>()
+            .unwrap()
+            .matches("/")
+            .expect("matches")
+            .is_empty());
+        assert!("/**"
+            .parse::<PathScheme>()
+            .unwrap()
+            .matches("/users/olix0r/face")
+            .expect("matches")
+            .is_empty());
+        let m = "/users/:id/face"
+            .parse::<PathScheme>()
+            .unwrap()
+            .matches("/users/olix0r/face")
+            .expect("matches");
+        assert_eq!(m.get("id").expect(":id matched"), "olix0r");
+        let m = "/users/:id/*rest"
+            .parse::<PathScheme>()
+            .unwrap()
+            .matches("/users/olix0r/face/glasses")
+            .expect("matches");
+        assert_eq!(m.get("id").expect(":id matched"), "olix0r");
+        assert_eq!(m.get("rest").expect("*rest matched"), "face/glasses");
     }
 
     #[test]
     fn display() {
-        for p in &["/", "/users/:id/face", "/users/:id/**"] {
+        for p in &["/", "/users/:id/face", "/users/:id/**", "/users/:id/*rest"] {
             assert_eq!(&p.parse::<PathScheme>().unwrap().to_string(), p);
         }
     }
